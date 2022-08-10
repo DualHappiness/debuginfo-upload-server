@@ -5,6 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     container: rust
     steps:
+      - uses: actions/checkout@v3
       - name: Test All
         run: cargo test
 
