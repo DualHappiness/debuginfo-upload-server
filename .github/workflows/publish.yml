@@ -29,7 +29,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v3
         with:
-          images: dualwu/debuginfod-upload-server
+          images: dualwu/debuginfo-upload-server
           tags: |
             type=ref,event=tag
           flavor: |
