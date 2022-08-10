@@ -67,7 +67,6 @@ async fn upload(form: warp::multipart::FormData) -> Result<impl Reply, Rejection
     Err(warp::reject())
 }
 
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
