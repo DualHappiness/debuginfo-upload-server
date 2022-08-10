@@ -82,6 +82,6 @@ async fn main() {
         .recover(handle_rejection);
 
     warp::serve(route)
-        .run(([127, 0, 0, 1], OPT.read().unwrap().port))
+        .run(([0, 0, 0, 0], OPT.read().unwrap().port))
         .await;
 }
