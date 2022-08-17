@@ -75,11 +75,16 @@ async fn main() {
         .await
         .unwrap();
 
-    let route = warp::post()
+    let upload = warp::post()
         .and(warp::path("debuginfod"))
         .and(warp::multipart::form().max_length(500 * 1024 * 1024))
-        .and_then(upload)
-        .recover(handle_rejection);
+        .and_then(upload);
+
+    let download = warp::get()
+        .and(warp::path("debuginfod"))
+        .and(warp::fs::dir(OPT.read().unwrap().output.clone()));
+
+    let route = upload.or(download).recover(handle_rejection);
 
     warp::serve(route)
         .run(([0, 0, 0, 0], OPT.read().unwrap().port))
