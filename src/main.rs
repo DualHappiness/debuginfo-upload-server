@@ -77,7 +77,7 @@ async fn main() {
 
     let upload = warp::post()
         .and(warp::path("debuginfod"))
-        .and(warp::multipart::form().max_length(500 * 1024 * 1024))
+        .and(warp::multipart::form().max_length(1000 * 1024 * 1024))
         .and_then(upload);
 
     let download = warp::get()
