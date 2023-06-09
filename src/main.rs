@@ -1,9 +1,5 @@
-use std::{convert::Infallible, path, sync::RwLock};
-
-use bytes::BufMut;
 use clap::Parser;
-use futures::TryStreamExt;
-use warp::{hyper::StatusCode, Filter, Rejection, Reply};
+use std::sync::RwLock;
 
 #[derive(Debug, Parser, Default)]
 #[clap(author, version, about, long_about = None)]
@@ -24,69 +20,44 @@ lazy_static::lazy_static! {
     static ref OPT: RwLock<Options> = RwLock::new(Options::default());
 }
 
-async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    let (code, message) = if err.is_not_found() {
-        (StatusCode::NOT_FOUND, "Not Found".to_string())
-    } else if err.find::<warp::reject::PayloadTooLarge>().is_some() {
-        (StatusCode::BAD_REQUEST, "Payload too large".to_string())
-    } else {
-        tracing::error!("unhandled error: {:?}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal Server Error".to_string(),
-        )
-    };
-    tracing::debug!("{} {}", code, message);
-    Ok(warp::reply::with_status(message, code))
+fn handle_error(err: impl std::error::Error) -> (axum::http::StatusCode, String) {
+    tracing::error!("{:?}", err);
+    (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        format!("{:?}", err),
+    )
 }
 
-fn reject_err(e: impl std::fmt::Debug) -> Rejection {
-    tracing::error!("{:?}", e);
-    warp::reject()
-}
-
-async fn upload(form: warp::multipart::FormData) -> Result<impl Reply, Rejection> {
-    let parts: Vec<::warp::multipart::Part> = form.try_collect().await.map_err(reject_err)?;
-    for p in parts {
-        tracing::info!("{:?}", p);
-        if p.name() == "file" && p.content_type() == Some("application/octet-stream") {
-            let filename = p.filename().unwrap().to_string();
-            let bytes = p
-                .stream()
-                .try_fold(Vec::new(), |mut vec, data| {
-                    vec.put(data);
-                    async move { Ok(vec) }
-                })
-                .await
-                .map_err(reject_err)?;
-            let path = path::Path::new(&OPT.read().map_err(reject_err)?.output).join(filename);
-            tokio::fs::write(path, bytes).await.map_err(reject_err)?;
-            return Ok("success");
+async fn upload(mut mulitpart: axum::extract::Multipart) -> axum::response::Result<&'static str> {
+    tracing::info!("upload, {:?}", mulitpart);
+    while let Some(field) = mulitpart.next_field().await? {
+        if field.name() == Some("file") && field.content_type() == Some("application/octet-stream")
+        {
+            let filename = field
+                .file_name()
+                .ok_or((axum::http::StatusCode::BAD_REQUEST, "no filename"))?
+                .to_string();
+            let data = field.bytes().await.map_err(handle_error)?;
+            let path = std::path::Path::new(&OPT.read().unwrap().output).join(filename);
+            tokio::fs::write(path, data).await.map_err(handle_error)?;
         }
     }
-    Err(warp::reject())
+    Ok("success")
 }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
     *OPT.write().unwrap() = Options::parse();
-    tokio::fs::create_dir_all(&OPT.read().unwrap().output)
+    let output = OPT.read().unwrap().output.clone();
+    tokio::fs::create_dir_all(output).await.unwrap();
+
+    let app = axum::Router::new().route("/debuginfod", axum::routing::post(upload));
+
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], OPT.read().unwrap().port));
+    tracing::info!("Listening on {}", addr);
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
         .await
         .unwrap();
-
-    let upload = warp::post()
-        .and(warp::path("debuginfod"))
-        .and(warp::multipart::form())
-        .and_then(upload);
-
-    let download = warp::get()
-        .and(warp::path("debuginfod"))
-        .and(warp::fs::dir(OPT.read().unwrap().output.clone()));
-
-    let route = upload.or(download).recover(handle_rejection);
-
-    warp::serve(route)
-        .run(([0, 0, 0, 0], OPT.read().unwrap().port))
-        .await;
 }
