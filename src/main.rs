@@ -1,7 +1,6 @@
 use axum::extract::DefaultBodyLimit;
 use clap::Parser;
 use std::sync::RwLock;
-use tower_http::limit::RequestBodyLimitLayer;
 
 #[derive(Debug, Parser, Default)]
 #[clap(author, version, about, long_about = None)]
@@ -55,9 +54,8 @@ async fn main() {
     tokio::fs::create_dir_all(output).await.unwrap();
 
     let app = axum::Router::new()
-        .layer(DefaultBodyLimit::disable())
-        .layer(RequestBodyLimitLayer::new(1024 * 1024 * 1024))
-        .route("/debuginfod", axum::routing::post(upload));
+        .route("/debuginfod", axum::routing::post(upload))
+        .layer(DefaultBodyLimit::disable());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], OPT.read().unwrap().port));
     tracing::info!("Listening on {}", addr);
