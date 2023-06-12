@@ -29,6 +29,8 @@ fn handle_error(err: impl std::error::Error) -> (axum::http::StatusCode, String)
     )
 }
 
+const MAX_SAVE_TIME: u64 = 60 * 60 * 24 * 30;
+
 async fn upload(mut mulitpart: axum::extract::Multipart) -> axum::response::Result<&'static str> {
     tracing::info!("upload, {:?}", mulitpart);
     while let Some(field) = mulitpart.next_field().await? {
@@ -39,8 +41,17 @@ async fn upload(mut mulitpart: axum::extract::Multipart) -> axum::response::Resu
                 .ok_or((axum::http::StatusCode::BAD_REQUEST, "no filename"))?
                 .to_string();
             let data = field.bytes().await.map_err(handle_error)?;
-            let path = std::path::Path::new(&OPT.read().unwrap().output).join(filename);
-            tokio::fs::write(path, data).await.map_err(handle_error)?;
+            let path = std::path::Path::new(&OPT.read().unwrap().output).join(&filename);
+            tokio::fs::write(&path, data).await.map_err(handle_error)?;
+            // TODO(dualwu): improve with storage, incase of not remove file
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(MAX_SAVE_TIME)).await;
+                tracing::info!("remove {}", &filename);
+                tokio::fs::remove_file(path).await.map_err(|err| {
+                    tracing::error!("remove {:?} failed, {:?}", filename, err);
+                    err
+                })
+            });
         }
     }
     Ok("success")
