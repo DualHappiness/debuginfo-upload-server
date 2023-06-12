@@ -1,2 +1,5 @@
 /target
 /uploads
+*.tar.gz
+*.tar
+*.output
