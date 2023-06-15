@@ -1,6 +1,11 @@
-use axum::extract::DefaultBodyLimit;
+use axum::{
+    body::StreamBody,
+    extract::{DefaultBodyLimit, Path},
+    response::IntoResponse,
+};
 use clap::Parser;
 use std::sync::RwLock;
+use tokio_util::io::ReaderStream;
 
 #[derive(Debug, Parser, Default)]
 #[clap(author, version, about, long_about = None)]
@@ -57,6 +62,30 @@ async fn upload(mut mulitpart: axum::extract::Multipart) -> axum::response::Resu
     Ok("success")
 }
 
+async fn download(Path(filename): Path<String>) -> impl IntoResponse {
+    let filepath = std::path::Path::new(&OPT.read().unwrap().output).join(&filename);
+    let file = match tokio::fs::File::open(&filepath).await {
+        Ok(file) => file,
+        Err(err) => {
+            tracing::error!("open {:?} failed, {:?}", filename, err);
+            return Err((axum::http::StatusCode::NOT_FOUND, "not found"));
+        }
+    };
+    let body = StreamBody::new(ReaderStream::new(file));
+    let headers = axum::http::HeaderMap::from_iter(vec![
+        (
+            axum::http::header::CONTENT_DISPOSITION,
+            axum::http::HeaderValue::from_str(&format!("attachment; filename={}", filename))
+                .unwrap(),
+        ),
+        (
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_str("application/octet-stream").unwrap(),
+        ),
+    ]);
+    Ok((headers, body))
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -66,6 +95,7 @@ async fn main() {
 
     let app = axum::Router::new()
         .route("/debuginfod", axum::routing::post(upload))
+        .route("/download/:filename", axum::routing::get(download))
         .layer(DefaultBodyLimit::disable());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], OPT.read().unwrap().port));
