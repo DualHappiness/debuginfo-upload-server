@@ -2,7 +2,7 @@
 authors = ["Dualwu <dualwu_tech@outlook.com>"]
 edition = "2021"
 name = "debuginfo-upload-server"
-version = "1.0.0"
+version = "1.0.1"
 rust-version = "1.70.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
