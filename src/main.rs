@@ -1,5 +1,5 @@
 use axum::{
-    body::StreamBody,
+    body::Body,
     extract::{DefaultBodyLimit, Path},
     response::IntoResponse,
 };
@@ -7,6 +7,7 @@ use clap::Parser;
 use std::sync::RwLock;
 use tokio_util::io::ReaderStream;
 
+const _MAX_SAVE_TIME: u64 = 60 * 60 * 24 * 15;
 #[derive(Debug, Parser, Default)]
 #[clap(author, version, about, long_about = None)]
 struct Options {
@@ -20,6 +21,15 @@ struct Options {
         default_value = "./uploads"
     )]
     output: String,
+
+    #[clap(
+        short,
+        long,
+        value_parser,
+        env = "MAX_SAVE_TIME",
+        default_value = "129600"
+    )]
+    max_save_time: u64,
 }
 
 lazy_static::lazy_static! {
@@ -34,10 +44,9 @@ fn handle_error(err: impl std::error::Error) -> (axum::http::StatusCode, String)
     )
 }
 
-const MAX_SAVE_TIME: u64 = 60 * 60 * 24 * 30;
-
 async fn upload(mut mulitpart: axum::extract::Multipart) -> axum::response::Result<&'static str> {
     tracing::info!("upload, {:?}", mulitpart);
+    let max_save_time = OPT.read().unwrap().max_save_time;
     while let Some(field) = mulitpart.next_field().await? {
         if field.name() == Some("file") && field.content_type() == Some("application/octet-stream")
         {
@@ -50,7 +59,7 @@ async fn upload(mut mulitpart: axum::extract::Multipart) -> axum::response::Resu
             tokio::fs::write(&path, data).await.map_err(handle_error)?;
             // TODO(dualwu): improve with storage, incase of not remove file
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(MAX_SAVE_TIME)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(max_save_time)).await;
                 tracing::info!("remove {}", &filename);
                 tokio::fs::remove_file(path).await.map_err(|err| {
                     tracing::error!("remove {:?} failed, {:?}", filename, err);
@@ -71,7 +80,7 @@ async fn download(Path(filename): Path<String>) -> impl IntoResponse {
             return Err((axum::http::StatusCode::NOT_FOUND, "not found"));
         }
     };
-    let body = StreamBody::new(ReaderStream::new(file));
+    let body = Body::from_stream(ReaderStream::new(file));
     let headers = axum::http::HeaderMap::from_iter(vec![
         (
             axum::http::header::CONTENT_DISPOSITION,
@@ -95,13 +104,11 @@ async fn main() {
 
     let app = axum::Router::new()
         .route("/debuginfod", axum::routing::post(upload))
-        .route("/download/:filename", axum::routing::get(download))
+        .route("/download/{filename}", axum::routing::get(download))
         .layer(DefaultBodyLimit::disable());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], OPT.read().unwrap().port));
     tracing::info!("Listening on {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
