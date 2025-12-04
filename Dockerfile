@@ -3,10 +3,10 @@ WORKDIR /usr/src/app
 COPY . .
 RUN cargo install --path .
 
-FROM gcc:13-bookworm AS minidump-builder
+FROM gcc:12-bookworm AS minidump-builder
 WORKDIR /usr/src/app
 COPY . .
-RUN cd breakpad && ./configure && make -j$(nproc)
+RUN mv linux-syscall-support breakpad/src/third_party/lss && cd breakpad && ./configure && make -j$(nproc)
 
 FROM debian:bookworm-slim
 COPY --from=builder /usr/local/cargo/bin/debuginfo-upload-server /usr/local/bin/debuginfo-upload-server

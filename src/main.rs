@@ -8,9 +8,11 @@ use clap::Parser;
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
 
-#[derive(Debug, Parser, Default, Clone)]
+#[derive(Debug, Parser, Clone)]
 #[clap(author, version, about, long_about = None)]
 struct Options {
+    #[clap(short, long, value_parser, env = "LOG_LEVEL", default_value = "info")]
+    log_level: tracing::Level,
     #[clap(short, long, value_parser, env = "SERVER_PORT", default_value_t = 8012)]
     port: u16,
     #[clap(
@@ -56,6 +58,12 @@ fn handle_error(err: impl std::error::Error) -> (axum::http::StatusCode, String)
         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         format!("{:?}", err),
     )
+}
+
+fn minidump_filepath(opt: &Options, vehicle_name: &str, timestamp: &str) -> std::path::PathBuf {
+    std::path::Path::new(&opt.minidump_dir)
+        .join(vehicle_name)
+        .join(format!("{}.minidump", timestamp))
 }
 
 async fn upload(
@@ -105,16 +113,19 @@ async fn download(
     Ok((headers, body))
 }
 
-#[tracing::instrument]
+#[tracing::instrument(skip(opt))]
 async fn upload_minidump_symbol(
     Extension(opt): Extension<Arc<Options>>,
-    Path(module_name): Path<String>,
-    Path(module_id): Path<String>,
+    Path((module_name, module_id)): Path<(String, String)>,
     mut mulitpart: axum::extract::Multipart,
 ) -> axum::response::Result<&'static str> {
+    tracing::info!("upload minidump symbol, {:?}, {:?}", module_name, module_id);
     let module_path = std::path::Path::new(&opt.minidump_sym_dir)
         .join(&module_name)
         .join(&module_id);
+    tokio::fs::create_dir_all(&module_path)
+        .await
+        .map_err(handle_error)?;
     while let Some(field) = mulitpart.next_field().await? {
         if field.name() == Some("file") && field.content_type() == Some("application/octet-stream")
         {
@@ -131,16 +142,19 @@ async fn upload_minidump_symbol(
     Ok("success")
 }
 
-#[tracing::instrument]
+#[tracing::instrument(skip(opt))]
 async fn upload_minidump(
     Extension(opt): Extension<Arc<Options>>,
-    Path(vehicle_name): Path<String>,
-    Path(timestamp): Path<String>,
+    Path((vehicle_name, timestamp)): Path<(String, String)>,
     mut mulitpart: axum::extract::Multipart,
 ) -> axum::response::Result<&'static str> {
+    tracing::info!("upload minidump, {:?}, {:?}", vehicle_name, timestamp);
     let minidump_path = std::path::Path::new(&opt.minidump_dir)
         .join(&vehicle_name)
         .join(&timestamp);
+    tokio::fs::create_dir_all(&minidump_path)
+        .await
+        .map_err(handle_error)?;
     while let Some(field) = mulitpart.next_field().await? {
         if field.name() == Some("file") && field.content_type() == Some("application/octet-stream")
         {
@@ -158,13 +172,12 @@ async fn upload_minidump(
                 .await
                 .map_err(handle_error)?;
 
-            let command = tokio::process::Command::new("minidump_stackwalk")
+            let output = tokio::process::Command::new("minidump_stackwalk")
                 .arg(&temp_file)
                 .arg(&opt.minidump_sym_dir)
-                .spawn()
+                .output()
+                .await
                 .map_err(handle_error)?;
-            let output = command.wait_with_output().await.map_err(handle_error)?;
-
             if !output.status.success() {
                 tracing::error!(
                     "minidump {} process status: {}, err: {}",
@@ -172,12 +185,15 @@ async fn upload_minidump(
                     output.status,
                     std::string::String::from_utf8_lossy(&output.stderr)
                 );
+            } else {
+                tracing::debug!(
+                    "minidump {} process success, stderr: {}",
+                    filename,
+                    std::string::String::from_utf8_lossy(&output.stderr)
+                );
             }
 
-            let output_path = std::path::Path::new(&opt.minidump_dir)
-                .join(&vehicle_name)
-                .join(&timestamp)
-                .join(format!("{}.minidump", filename));
+            let output_path = minidump_filepath(&opt, &vehicle_name, &timestamp);
             tokio::fs::write(output_path, output.stdout)
                 .await
                 .map_err(handle_error)?;
@@ -195,13 +211,20 @@ async fn list_minidump(
     Path(vehicle_name): Path<String>,
 ) -> axum::response::Result<Html<String>> {
     let minidump_path = std::path::Path::new(&opt.minidump_dir).join(&vehicle_name);
-    let mut dir = tokio::fs::read_dir(minidump_path)
-        .await
-        .map_err(handle_error)?;
-    let mut files = Vec::new();
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        files.push(entry.path().to_string_lossy().to_string());
+
+    fn process_entry(entry: walkdir::DirEntry) -> Option<String> {
+        // TODO(dualwu): remove first root dir
+        let parent = entry.path().parent()?.to_str()?;
+        let file_stem = entry.path().file_stem()?.to_str()?;
+        Some(format!("{}/{}", parent, file_stem))
     }
+    let files = walkdir::WalkDir::new(minidump_path)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(process_entry)
+        .collect::<Vec<_>>();
+    // TODO(dualwu): make a better html page, maybe link
     let html = format!(
         r#"<!DOCTYPE html>
 <html>
@@ -261,12 +284,9 @@ fn html_escape(s: &str) -> String {
 #[tracing::instrument(skip(opt))]
 async fn get_minidump(
     Extension(opt): Extension<Arc<Options>>,
-    Path(vehicle_name): Path<String>,
-    Path(timestamp): Path<String>,
+    Path((vehicle_name, timestamp)): Path<(String, String)>,
 ) -> axum::response::Result<Body> {
-    let minidump_path = std::path::Path::new(&opt.minidump_dir)
-        .join(&vehicle_name)
-        .join(&timestamp);
+    let minidump_path = minidump_filepath(&opt, &vehicle_name, &timestamp);
     let file = tokio::fs::File::open(minidump_path)
         .await
         .map_err(handle_error)?;
@@ -280,14 +300,14 @@ async fn remove_expired_file(
     max_save_time: std::time::Duration,
 ) -> anyhow::Result<()> {
     let now = std::time::SystemTime::now();
-    let mut dir = tokio::fs::read_dir(path).await?;
     let mut expired_files = Vec::new();
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        let path = entry.path();
-        if let Ok(metadata) = entry.metadata().await {
-            if let Ok(last_modified) = metadata.modified() {
-                if last_modified + max_save_time < now {
-                    expired_files.push(path);
+    for entry in walkdir::WalkDir::new(path) {
+        if let Ok(entry) = entry {
+            if let Ok(metadata) = entry.metadata() {
+                if let Ok(last_modified) = metadata.modified() {
+                    if last_modified + max_save_time < now {
+                        expired_files.push(entry.path().to_owned());
+                    }
                 }
             }
         }
@@ -311,12 +331,12 @@ async fn file_monitor(
     tracing::info!("file monitor start");
     let path = std::path::Path::new(&path);
     loop {
-        tokio::time::sleep(sleep_time).await;
         tracing::info!("scan started");
         if let Err(err) = remove_expired_file(path, max_save_time).await {
             tracing::error!("file monitor read dir {:?} failed, {:?}", path, err);
         }
         tracing::info!("scan complete");
+        tokio::time::sleep(sleep_time).await;
     }
     // tracing::info!("file monitor end");
 }
@@ -338,10 +358,20 @@ async fn init_path(
     tracing::info!("init path end");
 }
 
+async fn about() -> impl IntoResponse {
+    format!("debuginfo-upload-server {}", env!("CARGO_PKG_VERSION"))
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
     let opt = Options::parse();
+    tracing_subscriber::FmtSubscriber::builder()
+        .with_max_level(opt.log_level)
+        .with_ansi(true)
+        .with_file(true)
+        .with_line_number(true)
+        .pretty()
+        .init();
 
     let max_save_time = std::time::Duration::from_secs(opt.max_save_time);
     let sleep_time = std::time::Duration::from_hours(4);
@@ -350,6 +380,7 @@ async fn main() {
     init_path(&opt.minidump_dir, max_save_time, sleep_time).await;
 
     let app = axum::Router::new()
+        .route("/", axum::routing::get(about))
         .route("/debuginfod", axum::routing::post(upload))
         .route("/download/{filename}", axum::routing::get(download))
         .route(
@@ -357,7 +388,7 @@ async fn main() {
             axum::routing::post(upload_minidump_symbol),
         )
         .route(
-            "/minidump/${vehicle_name}",
+            "/minidump/{vehicle_name}",
             axum::routing::get(list_minidump),
         )
         .route(
