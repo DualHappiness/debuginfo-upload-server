@@ -18,7 +18,7 @@ jobs:
           - registry: harbor.zelostech.com.cn:5443
             username: ZELOS_USERNAME
             password: ZELOS_PASSWORD
-            image: harbor.zelostech.com.cn:5443/business/dualwu/debuginfo-upload-server
+            image: harbor-volc.zelostech.com.cn:5443/arch/dualwu/debuginfo-upload-server
     steps:
       - name: Check out the repo
         uses: actions/checkout@v3

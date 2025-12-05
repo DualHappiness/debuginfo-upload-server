@@ -2,7 +2,7 @@ use axum::{
     Extension,
     body::Body,
     extract::{DefaultBodyLimit, Path},
-    response::{Html, IntoResponse},
+    response::IntoResponse,
 };
 use clap::Parser;
 use std::sync::Arc;
@@ -61,6 +61,13 @@ fn handle_error(err: impl std::error::Error) -> (axum::http::StatusCode, String)
 }
 
 fn minidump_filepath(opt: &Options, vehicle_name: &str, timestamp: &str) -> std::path::PathBuf {
+    let timestamp = timestamp
+        .parse::<i64>()
+        .ok()
+        .map(chrono::DateTime::from_timestamp_nanos)
+        .map(|datetime| datetime.format("%Y-%m-%d %H:%M:%S.%f").to_string())
+        .unwrap_or(timestamp.to_string());
+
     std::path::Path::new(&opt.minidump_dir)
         .join(vehicle_name)
         .join(format!("{}.minidump", timestamp))
