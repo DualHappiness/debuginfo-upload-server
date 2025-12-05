@@ -205,95 +205,6 @@ async fn upload_minidump(
     Ok("success")
 }
 
-#[tracing::instrument(skip(opt))]
-async fn list_minidump(
-    Extension(opt): Extension<Arc<Options>>,
-    Path(vehicle_name): Path<String>,
-) -> axum::response::Result<Html<String>> {
-    let minidump_path = std::path::Path::new(&opt.minidump_dir).join(&vehicle_name);
-
-    fn process_entry(entry: walkdir::DirEntry) -> Option<String> {
-        // TODO(dualwu): remove first root dir
-        let parent = entry.path().parent()?.to_str()?;
-        let file_stem = entry.path().file_stem()?.to_str()?;
-        Some(format!("{}/{}", parent, file_stem))
-    }
-    let files = walkdir::WalkDir::new(minidump_path)
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_file())
-        .filter_map(process_entry)
-        .collect::<Vec<_>>();
-    // TODO(dualwu): make a better html page, maybe link
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Minidump 文件列表</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f5f5f5;
-        }}
-        h1 {{
-            color: #333;
-        }}
-        ul {{
-            list-style-type: none;
-            padding: 0;
-        }}
-        li {{
-            background-color: white;
-            margin: 5px 0;
-            padding: 10px;
-            border-radius: 4px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }}
-        li:hover {{
-            background-color: #f0f0f0;
-        }}
-    </style>
-</head>
-<body>
-    <h1>Minidump 文件列表 - {}</h1>
-    <ul>
-{}
-    </ul>
-</body>
-</html>"#,
-        vehicle_name,
-        files
-            .iter()
-            .map(|path| format!("        <li>{}</li>", html_escape(path)))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    Ok(Html(html))
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
-}
-
-#[tracing::instrument(skip(opt))]
-async fn get_minidump(
-    Extension(opt): Extension<Arc<Options>>,
-    Path((vehicle_name, timestamp)): Path<(String, String)>,
-) -> axum::response::Result<Body> {
-    let minidump_path = minidump_filepath(&opt, &vehicle_name, &timestamp);
-    let file = tokio::fs::File::open(minidump_path)
-        .await
-        .map_err(handle_error)?;
-    let body = Body::from_stream(ReaderStream::new(file));
-    Ok(body)
-}
-
 #[tracing::instrument]
 async fn remove_expired_file(
     path: &std::path::Path,
@@ -388,12 +299,8 @@ async fn main() {
             axum::routing::post(upload_minidump_symbol),
         )
         .route(
-            "/minidump/{vehicle_name}",
-            axum::routing::get(list_minidump),
-        )
-        .route(
             "/minidump/{vehicle_name}/{timestamp}",
-            axum::routing::post(upload_minidump).get(get_minidump),
+            axum::routing::post(upload_minidump),
         )
         .layer(axum::Extension(Arc::new(opt.clone())))
         .layer(DefaultBodyLimit::disable());
