@@ -156,9 +156,7 @@ async fn upload_minidump(
     mut mulitpart: axum::extract::Multipart,
 ) -> axum::response::Result<&'static str> {
     tracing::info!("upload minidump, {:?}, {:?}", vehicle_name, timestamp);
-    let minidump_path = std::path::Path::new(&opt.minidump_dir)
-        .join(&vehicle_name)
-        .join(&timestamp);
+    let minidump_path = std::path::Path::new(&opt.minidump_dir).join(&vehicle_name);
     tokio::fs::create_dir_all(&minidump_path)
         .await
         .map_err(handle_error)?;
@@ -171,10 +169,7 @@ async fn upload_minidump(
                 .to_string();
             tracing::info!("upload {:?} to {:?}", filename, minidump_path);
             let data = field.bytes().await.map_err(handle_error)?;
-            let temp_file = std::path::Path::new(&opt.minidump_dir)
-                .join(&vehicle_name)
-                .join(&timestamp)
-                .join(format!("{}.dmp", filename));
+            let temp_file = std::path::Path::new("/tmp").join(&filename);
             tokio::fs::write(&temp_file, data)
                 .await
                 .map_err(handle_error)?;
