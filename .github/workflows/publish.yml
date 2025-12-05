@@ -15,7 +15,7 @@ jobs:
             username: DOCKER_USERNAME
             password: DOCKER_PASSWORD
             image: dualwu/debuginfo-upload-server
-          - registry: harbor.zelostech.com.cn:5443
+          - registry: harbor-volc.zelostech.com.cn:5443
             username: ZELOS_USERNAME
             password: ZELOS_PASSWORD
             image: harbor-volc.zelostech.com.cn:5443/arch/dualwu/debuginfo-upload-server
